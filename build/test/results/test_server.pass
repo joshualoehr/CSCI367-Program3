@@ -1,0 +1,57 @@
+---
+:source:
+  :path: test
+  :file: test_server.c
+:successes:
+- :test: test_server_should_fail_with_invalid_argument_count
+  :line: 16
+  :message: ''
+- :test: test_init_listener_should_return_sd_when_port_valid
+  :line: 32
+  :message: ''
+- :test: test_init_listener_should_return_INVALID_when_port_invalid_or_socket_creation_fails
+  :line: 39
+  :message: ''
+- :test: test_handle_listener_should_do_nothing_if_new_connection_fails
+  :line: 49
+  :message: ''
+- :test: test_handle_listener_should_decline_pending_participant_when_at_limit
+  :line: 60
+  :message: ''
+- :test: test_handle_listener_should_accept_pending_participant_when_below_limit
+  :line: 78
+  :message: ''
+- :test: test_handle_listener_should_decline_pending_observer_when_at_limit
+  :line: 95
+  :message: ''
+- :test: test_handle_listener_should_accept_pending_observer_when_below_limit
+  :line: 111
+  :message: ''
+- :test: test_new_connection_should_initialize_new_participant_connection_correctly
+  :line: 128
+  :message: ''
+- :test: test_new_connection_should_initialize_new_observer_connection_correctly
+  :line: 148
+  :message: ''
+:failures: []
+:ignores: []
+:counts:
+  :total: 10
+  :passed: 10
+  :failed: 0
+  :ignored: 0
+:stdout:
+- 'Error: Wrong number of arguments'
+- 'usage:'
+- prog3_server server_participant_port server_observer_port
+- 'Error: Wrong number of arguments'
+- 'usage:'
+- prog3_server server_participant_port server_observer_port
+- 'Error: socket accept failed'
+- 'Error: Bind failed'
+- 'Error: Bind failed'
+- 'Error: Bind failed'
+- 'Error: Bind failed'
+- 'Error: Bind failed'
+- 'Error: Bind failed'
+- ''

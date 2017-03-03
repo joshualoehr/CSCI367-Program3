@@ -1,0 +1,20 @@
+1. This assignment is to create a public/private messaging program which accepts
+   connections from both participants and observers. The participants will
+   associate with a username, and are responsible for sending user input to the
+   server. The observers pair with participants, and display output from the
+   server. Participants may send public messages, which will broadcast to all
+   observers, or private messages, which broadcast only to a single
+   participant's paired observer. Participants and observers may connect or
+   disconnect at any time.
+
+2. The protocol seems all good (for now).
+
+3. I anticipate having some challenges using select, since that was quite
+   difficult to wrap my head around in program 2, though hopefully I will have
+   learned enough by now to avoid most of the headache. I do think implementing
+   the timing constraints on providing usernames to the server will be tricky,
+   because we didn't do much of that in the last program. Otherwise, the only
+   other aspect which I think will be difficult will be differentiating between
+   public and private messages, and treating them appropriately.
+
+4. The man pages, the internet, and Brian Hutchinson.

@@ -1,0 +1,23 @@
+---
+:source:
+  :path: test
+  :file: test_observer.c
+:successes:
+- :test: test_observer_should_fail_with_invalid_arguments
+  :line: 14
+  :message: ''
+:failures: []
+:ignores: []
+:counts:
+  :total: 1
+  :passed: 1
+  :failed: 0
+  :ignored: 0
+:stdout:
+- 'Error: Wrong number of arguments'
+- 'usage:'
+- prog3_observer server_address server_port
+- 'Error: Wrong number of arguments'
+- 'usage:'
+- prog3_observer server_address server_port
+- ''
