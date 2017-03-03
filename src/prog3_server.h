@@ -43,9 +43,9 @@ typedef struct ServerState {
 	Connection *pending_conn;
 
 	int fd_max;
-	fd_set *master_set;
-	fd_set *read_set;
-	fd_set *write_set;
+	fd_set master_set;
+	fd_set read_set;
+	fd_set write_set;
 	struct timeval timeout;
 
 } ServerState;

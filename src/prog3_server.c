@@ -19,6 +19,9 @@
 int (*mock_accept)(int sockfd, struct sockaddr *addr, socklen_t *addrlen) = accept;
 
 void init_server_state(ServerState *state) {
+	state->p_count = 0;
+	state->o_count = 0;
+
 	state->p_conns = (struct Connection**) malloc(sizeof(struct Connection*) * MAX_PARTICIPANTS);
 	for (int i = 0; i < MAX_PARTICIPANTS; i++) {
 		state->p_conns[i] = (struct Connection*) malloc(sizeof(struct Connection));
@@ -30,16 +33,13 @@ void init_server_state(ServerState *state) {
 
 	state->pending_conn = (struct Connection*) malloc(sizeof(struct Connection));
 
-	state->master_set = (fd_set*) malloc(sizeof(fd_set));
-	state->read_set = (fd_set*) malloc(sizeof(fd_set));
-	state->write_set = (fd_set*) malloc(sizeof(fd_set));
-	FD_ZERO(state->master_set);
-	FD_ZERO(state->read_set);
-	FD_ZERO(state->write_set);
+	FD_ZERO(&state->master_set);
+	FD_ZERO(&state->read_set);
+	FD_ZERO(&state->write_set);
 
 	// TODO: This will change
-	state->timeout.tv_sec = 0;
-	state->timeout.tv_usec = 500000;
+	state->timeout.tv_sec = 10;
+	state->timeout.tv_usec = 0;
 }
 
 int init_listener(int port) {
@@ -90,19 +90,23 @@ int init_listener(int port) {
 		return INVALID;
 	}
 
+	fprintf(stdout, "Socket %d listening on port %d...\n", sd, port);
 	return sd;
 }
 
 char handle_listener(int l_sd, ServerState *state) {
+	fprintf(stdout, "Handling listener (%d)...\n", l_sd);
 	if (new_connection(l_sd, state) == FAILURE) {
 		return '!';
 	}
 
+	// TODO: p_count == MAX_PARTICIPANTS should not refuse observer
 	if (state->p_count >= MAX_PARTICIPANTS || state->o_count >= MAX_OBSERVERS) {
 		close(state->pending_conn->sd);
 		return 'N';
 	}
 
+	// TODO: validate username before accepting connection
 	state->p_conns[state->p_count++] = state->pending_conn;
 	return 'Y';
 }
@@ -115,11 +119,13 @@ int new_connection(int l_sd, ServerState *state) {
 
 	struct sockaddr_in cad;
 	int alen = sizeof(cad);
+	fprintf(stdout, "Waiting to accept new connection (%d)...\n", l_sd);
 	int new_sd = ACCEPT(l_sd, (struct sockaddr *)&cad, &alen);
 	if (new_sd == INVALID) {
 		fprintf(stderr, "Error: socket accept failed\n");
 		return FAILURE;
 	}
+	fprintf(stdout, "accepted (%d)!\n", new_sd);
 
 	state->pending_conn->type = (l_sd == state->p_listener) ? PARTICIPANT : OBSERVER;
 	state->pending_conn->sd = new_sd;
@@ -148,74 +154,74 @@ int main_server(int argc, char **argv) {
 
 	/* Initialize listeners */
 	if ((state.p_listener = init_listener(p_port)) == INVALID) {
-		fprintf(stderr, "Error: invalid port %s", argv[1]);
+		fprintf(stderr, "Error: unable to initialize listener on port %s\n", argv[1]);
 		return EXIT_FAILURE;
 	}
 	if ((state.o_listener = init_listener(o_port)) == INVALID) {
-		fprintf(stderr, "Error: invalid port %s", argv[2]);
+		fprintf(stderr, "Error: unable to initialize listener on port %s\n", argv[2]);
 		return EXIT_FAILURE;
 	}
-	FD_SET(state.p_listener, state.master_set);
-	FD_SET(state.o_listener, state.master_set);
+	FD_SET(state.p_listener, &state.master_set);
+	FD_SET(state.o_listener, &state.master_set);
 	state.fd_max = (state.p_listener > state.o_listener) ? state.p_listener : state.o_listener;
 
 	while (1) {
 		/* Select sockets and update fd_sets */
 		state.read_set = state.master_set;
 		state.write_set = state.master_set;
-		if (select(state.fd_max + 1, state.read_set, state.write_set, NULL, &state.timeout) == INVALID) {
+		if (select(state.fd_max + 1, &state.read_set, &state.write_set, NULL, &state.timeout) == INVALID) {
 			fprintf(stderr, "Error: unable to select.\n");
 			return EXIT_FAILURE;
 		}
 
+		/* Check listeners */
+		if (FD_ISSET(state.p_listener, &state.read_set)) {
+			fprintf(stdout, "Handling p_listener\n");
+			char response = handle_listener(state.p_listener, &state);
+			send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS);
+		}
+		if (FD_ISSET(state.o_listener, &state.read_set)) {
+			fprintf(stdout, "Handling o_listener\n");
+			char response = handle_listener(state.o_listener, &state);
+			send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS);
+		}
+
 		/* Check participant connections */
 		for (int i = 0; i < state.p_count; i++) {
-			fprintf(stdout, "%d\n", i);
 			Connection *conn = state.p_conns[i];
 
-			if (FD_ISSET(conn->sd, state.read_set)) {
-				fprintf(stdout, "Participant connected!");
+			if (FD_ISSET(conn->sd, &state.read_set)) {
+				fprintf(stdout, "Participant sending!");
+				// handle participant communication
+			}
+			if (FD_ISSET(conn->sd, &state.read_set)) {
+				fprintf(stdout, "Participant recving!");
 				// handle participant communication
 			}
 		}
 
 		/* Check observer connections */
 		for (int i = 0; i < state.o_count; i++) {
-			fprintf(stdout, "%d\n", i);
 			Connection *conn = state.o_conns[i];
 
-			if (FD_ISSET(conn->sd, state.write_set)) {
-				fprintf(stdout, "Observer connected!");
+			if (FD_ISSET(conn->sd, &state.read_set)) {
+				fprintf(stdout, "Observer sending!");
+				// handle observer communication
+			}
+			if (FD_ISSET(conn->sd, &state.write_set)) {
+				fprintf(stdout, "Observer recving!");
 				// handle observer communication
 			}
 		}
 
-		/* Check listeners */
-		if (FD_ISSET(state.p_listener, state.read_set)) {
-			fprintf(stdout, "Handling p_listener\n");
-			char response = handle_listener(state.p_listener, &state);
-			send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS);
-		}
-		if (FD_ISSET(state.o_listener, state.read_set)) {
-			fprintf(stdout, "Handling o_listener\n");
-			char response = handle_listener(state.o_listener, &state);
-			send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS);
-		}
-
-		for (int i = 0; i < state.fd_max; i++) {
-			if (FD_ISSET(i, state.read_set) || FD_ISSET(i, state.write_set)) {
-				fprintf(stdout, "%d ready\n", i);
-			}
-		}
-
-		FD_ZERO(state.master_set);
-		FD_SET(state.p_listener, state.master_set);
-		FD_SET(state.o_listener, state.master_set);
+		FD_ZERO(&state.master_set);
+		FD_SET(state.p_listener, &state.master_set);
+		FD_SET(state.o_listener, &state.master_set);
 		for (int p = 0; p < state.p_count; p++) {
-			FD_SET(state.p_conns[p]->sd, state.master_set);
+			FD_SET(state.p_conns[p]->sd, &state.master_set);
 		}
 		for (int o = 0; o < state.o_count; o++) {
-			FD_SET(state.o_conns[o]->sd, state.master_set);
+			FD_SET(state.o_conns[o]->sd, &state.master_set);
 		}
 	}
 }

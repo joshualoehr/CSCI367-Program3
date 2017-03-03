@@ -66,6 +66,8 @@ int init_connection(char *host, int port) {
 		return INVALID;
 	}
 
+	fprintf(stdout, "Able to connect socket %d on port %d\n", sd, port);
+
 	return sd;
 }
 
@@ -77,6 +79,7 @@ int confirm_connection_allowed(ParticipantState *state) {
 		fprintf(stderr, "Error: unable to recv connection confirmation from server.\n");
 		return FAILURE;
 	}
+	fprintf(stdout, "Server responded with %c\n", response);
 
 	return response == 'Y' ? SUCCESS : FAILURE;
 }
@@ -160,7 +163,7 @@ int main_participant(int argc, char **argv) {
 		return EXIT_SUCCESS;
 	}
 
-
+	negotiate_username(&state);
 
 
 
@@ -194,6 +197,9 @@ int mock_prompt_and_get_username_invalid(char *input) {
 	return SUCCESS;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+
 /* send username to server */
 int (*mock_send_username)(int sockfd, const void *buf, size_t len, int flags) = send;
 int mock_send_username_success(int sockfd, const void *buf, size_t len, int flags) {
@@ -221,3 +227,4 @@ int mock_recv_negotiation_T(int sockfd, void *buf, size_t len, int flags) {
 	return SUCCESS;
 }
 
+#pragma GCC diagnostic pop
