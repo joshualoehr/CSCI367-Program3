@@ -21,6 +21,8 @@
 #define OBSERVER 2
 #define MAX_OBSERVERS 255
 
+#define USERNAME_MAX_LENGTH 10
+
 #include <sys/socket.h>
 
 typedef struct Connection {

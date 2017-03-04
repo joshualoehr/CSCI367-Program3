@@ -31,16 +31,15 @@ void init_server_state(ServerState *state) {
 		state->o_conns[i] = (struct Connection*) malloc(sizeof(struct Connection));
 	}
 
-	state->pending_conn = (struct Connection*) malloc(sizeof(struct Connection));
-
 	FD_ZERO(&state->master_set);
 	FD_ZERO(&state->read_set);
 	FD_ZERO(&state->write_set);
 
 	// TODO: This will change
-	state->timeout.tv_sec = 10;
-	state->timeout.tv_usec = 0;
+	state->timeout.tv_sec = 0;
+	state->timeout.tv_usec = 50000;
 }
+
 
 int init_listener(int port) {
 	int sd;
@@ -94,24 +93,24 @@ int init_listener(int port) {
 	return sd;
 }
 
+
 char handle_listener(int l_sd, ServerState *state) {
 	fprintf(stdout, "Handling listener (%d)...\n", l_sd);
 	if (new_connection(l_sd, state) == FAILURE) {
 		return '!';
 	}
 
-	// TODO: p_count == MAX_PARTICIPANTS should not refuse observer
-	if (state->p_count >= MAX_PARTICIPANTS || state->o_count >= MAX_OBSERVERS) {
-		close(state->pending_conn->sd);
+	if ( (l_sd == state->p_listener && state->p_count >= MAX_PARTICIPANTS) ||
+		 (l_sd == state->o_listener && state->o_count >= MAX_OBSERVERS) ) {
 		return 'N';
 	}
 
-	// TODO: validate username before accepting connection
-	state->p_conns[state->p_count++] = state->pending_conn;
 	return 'Y';
 }
 
+
 int new_connection(int l_sd, ServerState *state) {
+	state->pending_conn = (struct Connection*) malloc(sizeof(struct Connection));
 	state->pending_conn->type = INVALID;
 	state->pending_conn->sd = INVALID;
 	state->pending_conn->name_len = 0;
@@ -119,7 +118,7 @@ int new_connection(int l_sd, ServerState *state) {
 
 	struct sockaddr_in cad;
 	int alen = sizeof(cad);
-	fprintf(stdout, "Waiting to accept new connection (%d)...\n", l_sd);
+	fprintf(stdout, "Waiting to accept new connection (%d)... ", l_sd);
 	int new_sd = ACCEPT(l_sd, (struct sockaddr *)&cad, &alen);
 	if (new_sd == INVALID) {
 		fprintf(stderr, "Error: socket accept failed\n");
@@ -133,6 +132,31 @@ int new_connection(int l_sd, ServerState *state) {
 	return SUCCESS;
 }
 
+
+int validate_username(int len, char *name, ServerState *state) {
+	/* Check username is of valid length */
+	if (0 == len || len > USERNAME_MAX_LENGTH) {
+		return 'I';
+	}
+
+	/* Check username has only valid characters */
+	for (int i = 0; i < len; i++) {
+		char c = name[i];
+		if( (c < '0' || c > '9') && (c < 'A' || c > 'Z') &&
+			(c < 'a' || c > 'z') && (c != '_' )) {
+			  return 'I';
+		}
+	}
+
+	/* Check username is not yet taken */
+	for (int i = 0; i < state->p_count; i++) {
+		if (strcmp(state->p_conns[i]->name, name) == 0) {
+			return 'T';
+		}
+	}
+
+	return 'Y';
+}
 
 
 int main_server(int argc, char **argv) {
@@ -176,9 +200,41 @@ int main_server(int argc, char **argv) {
 
 		/* Check listeners */
 		if (FD_ISSET(state.p_listener, &state.read_set)) {
-			fprintf(stdout, "Handling p_listener\n");
+			/* Send connection confirmation */
 			char response = handle_listener(state.p_listener, &state);
-			send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS);
+			if (send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
+				fprintf(stderr, "Error: unable to send connection confirmation to participant (socket error).\n");
+			}
+
+			fprintf(stdout, "Recving username len... ");
+			/* Receive username (length, then string) */
+			uint8_t name_len;
+			if (recv(state.pending_conn->sd, &name_len, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
+				fprintf(stderr, "Error: unable to recv username len from participant (socket error).\n");
+			}
+			fprintf(stdout, "%d\n", name_len);
+			char name[name_len];
+			fprintf(stdout, "Recving username... ");
+			if (recv(state.pending_conn->sd, &name, sizeof(char) * name_len, NO_FLAGS) < SUCCESS) {
+				fprintf(stderr, "Error: unable to recv username from participant (socket error).\n");
+			}
+			fprintf(stdout, "%s\n", name);
+
+			/* Send username confirmation */
+			response = validate_username(name_len, name, &state);
+			fprintf(stdout, "Sending username confirmation (%c)...\n", response);
+			if (send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
+				fprintf(stderr, "Error: unable to send username confirmation to participant (socket error).\n");
+			} else {
+				state.pending_conn->name = name;
+				state.pending_conn->name_len = name_len;
+			}
+
+			if (response == 'Y') {
+				// broadcast to observers
+				fprintf(stdout, "Adding active participant (%s) to p_conns\n", name);
+				state.p_conns[state.p_count++] = state.pending_conn;
+			}
 		}
 		if (FD_ISSET(state.o_listener, &state.read_set)) {
 			fprintf(stdout, "Handling o_listener\n");
@@ -194,7 +250,7 @@ int main_server(int argc, char **argv) {
 				fprintf(stdout, "Participant sending!");
 				// handle participant communication
 			}
-			if (FD_ISSET(conn->sd, &state.read_set)) {
+			if (FD_ISSET(conn->sd, &state.write_set)) {
 				fprintf(stdout, "Participant recving!");
 				// handle participant communication
 			}

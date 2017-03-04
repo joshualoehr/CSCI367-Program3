@@ -1,13 +1,21 @@
 #ifdef TEST
 #define CONNECT mock_connect
 #define PROMPT_AND_GET_USERNAME mock_prompt_and_get_username
+#define SEND_USERNAME_LEN mock_send_username_len
 #define SEND_USERNAME mock_send_username
 #define RECV_NEGOTIATION mock_recv_negotiation
+#define PRMPT_AND_GET_MESSAGE mock_prompt_and_get_message
+#define SEND_MESSAGE_LEN mock_send_message_len
+#define SEND_MESSAGE mock_send_message
 #else
 #define CONNECT connect
 #define PROMPT_AND_GET_USERNAME prompt_and_get_username
+#define SEND_USERNAME_LEN send
 #define SEND_USERNAME send
 #define RECV_NEGOTIATION recv
+#define PROMPT_AND_GET_MESSAGE prompt_and_get_message
+#define SEND_MESSAGE_LEN send
+#define SEND_MESSAGE send
 #endif
 
 #include "prog3_participant.h"
@@ -66,7 +74,7 @@ int init_connection(char *host, int port) {
 		return INVALID;
 	}
 
-	fprintf(stdout, "Able to connect socket %d on port %d\n", sd, port);
+	fprintf(stdout, "Connected socket %d on port %d\n", sd, port);
 
 	return sd;
 }
@@ -74,12 +82,12 @@ int init_connection(char *host, int port) {
 // Untested
 int confirm_connection_allowed(ParticipantState *state) {
 	uint8_t response;
-	fprintf(stdout, "Waiting for server confirmation...\n");
+	fprintf(stdout, "Waiting for server confirmation... ");
 	if (recv(state->sd, &response, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
 		fprintf(stderr, "Error: unable to recv connection confirmation from server.\n");
 		return FAILURE;
 	}
-	fprintf(stdout, "Server responded with %c\n", response);
+	fprintf(stdout, "%c\n", response);
 
 	return response == 'Y' ? SUCCESS : FAILURE;
 }
@@ -95,40 +103,28 @@ int prompt_and_get_username(char *input) {
 	return SUCCESS;
 }
 
-int validate_username(char *name) {
-	int len = strlen(name);
-	if (0 == len || len > USERNAME_MAX_LENGTH) {
-		return INVALID;
-	}
-
-	for (int i = 0; i < len; i++) {
-		char c = name[i];
-		if( (c < '0' || c > '9') && (c < 'A' || c > 'Z') &&
-			(c < 'a' || c > 'z') && (c != '_' )) {
-			  return INVALID;
-		}
-	}
-
-	return SUCCESS;
-}
-
 int negotiate_username(ParticipantState *state) {
 	char input[255], response;
 
 	while (1) {
 		PROMPT_AND_GET_USERNAME(input);
-		if (SEND_USERNAME(state->sd, input, sizeof(char)*strlen(input), NO_FLAGS) < SUCCESS) {
-			fprintf(stderr, "Error: unable to send username to server.\n");
+		uint8_t input_len = strlen(input);
+		if (SEND_USERNAME_LEN(state->sd, &input_len, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
+			fprintf(stderr, "Error: unable to send username len to server (socket error).\n");
 			return FAILURE;
 		}
-		if (RECV_NEGOTIATION(state->sd, &response, sizeof(char), NO_FLAGS)) {
-			fprintf(stderr, "Error: unable to recv username negotiation from server.\n");
+		if (SEND_USERNAME(state->sd, input, sizeof(char)*strlen(input), NO_FLAGS) < SUCCESS) {
+			fprintf(stderr, "Error: unable to send username to server (socket error).\n");
+			return FAILURE;
+		}
+		if (RECV_NEGOTIATION(state->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
+			fprintf(stderr, "Error: unable to recv username negotiation from server (socket error).\n");
 			return FAILURE;
 		}
 		switch (response) {
-		case 'Y': return SUCCESS;
-		case 'I': return INVALID;
-		case 'T': return INVALID;
+		case 'Y': fprintf(stdout, "Server accepted username (%s)!\n", input); return SUCCESS;
+		case 'I': fprintf(stdout, "Username %s invalid, please try again.\n", input); break;
+		case 'T': fprintf(stdout, "Username %s already in use, please try again.\n", input); break;
 		default: fprintf(stderr, "Error: unexpected username negotiation response (%c)", response);
 				 return FAILURE;
 		}
@@ -136,6 +132,40 @@ int negotiate_username(ParticipantState *state) {
 
 	return FAILURE;
 }
+
+int prompt_and_get_message(char *input) {
+	fprintf(stdout, "Enter message: ");
+	while (scanf("%s", input) < SUCCESS) {
+		fprintf(stderr, "Error: unable to read stdin, try again.\n");
+	}
+	fprintf(stdout, "\n");
+
+	return SUCCESS;
+}
+
+int send_message(ParticipantState *state) {
+	char input[1000], response;
+
+	PROMPT_AND_GET_MESSAGE(input);
+	uint16_t message_len = strlen(input);
+	if (message_len > MSG_MAX_LEN) {
+		fprintf(stdout, "Message exceeded max length (%d); did not send.\n", message_len);
+		return INVALID;
+	}
+
+	if (SEND_MESSAGE_LEN(state->sd, &message_len, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
+		fprintf(stderr, "Error: unable to send message len (socket error).\n");
+		return FAILURE;
+	}
+	if (SEND_MESSAGE(state->sd, &input, sizeof(char) * message_len, NO_FLAGS) < SUCCESS) {
+		fprintf(stderr, "Error: unable to send message (socket error).\n");
+		return FAILURE;
+	}
+
+	fprintf(stdout, "Message sent! You rock!\n");
+	return SUCCESS;
+}
+
 
 int main_participant(int argc, char **argv) {
 	int sd, port;
@@ -163,11 +193,16 @@ int main_participant(int argc, char **argv) {
 		return EXIT_SUCCESS;
 	}
 
-	negotiate_username(&state);
+	if (negotiate_username(&state) == FAILURE) {
+		fprintf(stderr, "Error: unable to negotiate username.\n");
+		return EXIT_FAILURE;
+	}
 
-
-
-
+	while (1) {
+		if (send_message(&state) == FAILURE) {
+			return EXIT_FAILURE;
+		}
+	}
 
 	return EXIT_SUCCESS;
 }
@@ -187,6 +222,7 @@ int mock_connect_failure(int socket, const struct sockaddr *address, socklen_t a
 	return INVALID;
 }
 
+/* get username input */
 int (*mock_prompt_and_get_username)(char *input) = prompt_and_get_username;
 int mock_prompt_and_get_username_valid(char *input) {
 	input = "validname";
@@ -199,6 +235,12 @@ int mock_prompt_and_get_username_invalid(char *input) {
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+
+/* send username len to server */
+int (*mock_send_username_len)(int sockfd, const void *buf, size_t len, int flags) = send;
+int mock_send_username_len_success(int sockfd, const void *buf, size_t len, int flags) {
+	return SUCCESS;
+}
 
 /* send username to server */
 int (*mock_send_username)(int sockfd, const void *buf, size_t len, int flags) = send;
@@ -224,6 +266,29 @@ int mock_recv_negotiation_I(int sockfd, void *buf, size_t len, int flags) {
 int mock_recv_negotiation_T(int sockfd, void *buf, size_t len, int flags) {
 	char val = 'T';
 	memcpy(buf, &val, sizeof(char));
+	return SUCCESS;
+}
+
+/* get message input */
+int (*mock_prompt_and_get_message)(char *input) = prompt_and_get_message;
+int mock_prompt_and_get_message_valid(char *input) {
+	input = "valid message";
+	return SUCCESS;
+}
+int mock_prompt_and_get_message_invalid(char *input) {
+	input = "invalid message";
+	return SUCCESS;
+}
+
+/* send message len to server */
+int (*mock_send_message_len)(int sockfd, const void *buf, size_t len, int flags) = send;
+int mock_send_message_len_success(int sockfd, const void *buf, size_t len, int flags) {
+	return SUCCESS;
+}
+
+/* send message to server */
+int (*mock_send_message)(int sockfd, const void *buf, size_t len, int flags) = send;
+int mock_send_message_success(int sockfd, const void *buf, size_t len, int flags) {
 	return SUCCESS;
 }
 

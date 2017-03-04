@@ -15,7 +15,7 @@
 #define MIN_PORT 1024
 #define NO_FLAGS 0
 
-#define USERNAME_MAX_LENGTH 10
+#define MSG_MAX_LEN 1000
 
 #include <sys/socket.h>
 
@@ -46,11 +46,24 @@ int mock_prompt_and_get_username_invalid(char *input);
 extern int (*mock_send_username)(int sockfd, const void *buf, size_t len, int flags);
 int mock_send_username_success(int sockfd, const void *buf, size_t len, int flags);
 
+extern int (*mock_send_username_len)(int sockfd, const void *buf, size_t len, int flags);
+int mock_send_username_success_len(int sockfd, const void *buf, size_t len, int flags);
+
 extern int (*mock_recv_negotiation)(int sockfd, void *buf, size_t len, int flags);
 int mock_recv_negotiation_timeout(int sockfd, void *buf, size_t len, int flags);
 int mock_recv_negotiation_Y(int sockfd, void *buf, size_t len, int flags);
 int mock_recv_negotiation_I(int sockfd, void *buf, size_t len, int flags);
 int mock_recv_negotiation_T(int sockfd, void *buf, size_t len, int flags);
+
+extern int (*mock_prompt_and_get_message)(char *input);
+int mock_prompt_and_get_message_valid(char *input);
+int mock_prompt_and_get_message_invalid(char *input);
+
+extern int (*mock_send_message)(int sockfd, const void *buf, size_t len, int flags);
+int mock_send_message_success(int sockfd, const void *buf, size_t len, int flags);
+
+extern int (*mock_send_message_len)(int sockfd, const void *buf, size_t len, int flags);
+int mock_send_message_success_len(int sockfd, const void *buf, size_t len, int flags);
 
 
 
