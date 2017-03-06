@@ -20,20 +20,31 @@
 #define MAX_PARTICIPANTS 255
 #define OBSERVER 2
 #define MAX_OBSERVERS 255
-#define PENDING 3
+#define PENDING_PARTICIPANT 3
+#define PENDING_OBSERVER 4
 #define MAX_PENDING 255
 
 #define USERNAME_MAX_LENGTH 10
+#define MSG_MAX_LEN 1000
+#define QUEUE_MAX 255
 
 #include <sys/socket.h>
 
-typedef struct Connection {
+typedef struct Connection Connection;
+struct Connection {
 	int type;
 	int sd;
 
 	int name_len;
 	char name[USERNAME_MAX_LENGTH+1];
-} Connection;
+
+	Connection *affiliated;
+
+	int queue_len;
+	char **msg_queue;
+
+	int deferred_disconnect;
+};
 
 typedef struct ServerState {
 	int p_listener;
@@ -55,11 +66,15 @@ typedef struct ServerState {
 
 } ServerState;
 
+int recv_(Connection *conn, void *buf, size_t len, int flags, ServerState *state);
+int remove_connection(Connection *conn, ServerState *state);
+
 void init_server_state(ServerState *state);
 int init_listener(int port);
 int negotiate_connection(int l_sd, ServerState *state);
 int new_connection(int l_sd, ServerState *state);
-int validate_username(char *name, int name_len, ServerState *state);
+int validate_username(char *name, int name_len, int type, ServerState *state);
+int enqueue_message(char *msg, ServerState *state);
 int main_server(int argc, char **argv);
 
 

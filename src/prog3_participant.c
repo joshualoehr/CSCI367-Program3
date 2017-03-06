@@ -142,10 +142,21 @@ int negotiate_username(ParticipantState *state) {
 
 int prompt_and_get_message(char *input) {
 	fprintf(stdout, "Enter message: ");
-	while (scanf("%s", input) < SUCCESS) {
+
+	char c;
+	while ((c = getchar()) != EOF && c != '\n');
+//	fgets(input, MSG_MAX_LEN, stdin);
+
+	while (scanf("%[^\n]", input) < SUCCESS) {
 		fprintf(stderr, "Error: unable to read stdin, try again.\n");
+		while ((c = getchar()) != EOF && c != '\n');
 	}
 	fprintf(stdout, "\n");
+
+	int len = strlen(input);
+	if (len > 0 && input[len - 1] == '\n') {
+		input[len - 1] = '\0';
+	}
 
 	return SUCCESS;
 }
@@ -155,13 +166,14 @@ int send_message(ParticipantState *state) {
 
 	PROMPT_AND_GET_MESSAGE(input);
 	uint16_t message_len = strlen(input);
+	uint16_t net_order = htons(message_len);
 	if (message_len > MSG_MAX_LEN) {
 		fprintf(stdout, "Message exceeded max length (%d); did not send.\n", message_len);
 		return INVALID;
 	}
 
-	fprintf(stdout, "Sending message (len %d): %s\n", message_len, input);
-	if (SEND_MESSAGE_LEN(state->sd, &message_len, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
+	fprintf(stdout, "Sending message (len %d -> %d): %s\n", message_len, net_order, input);
+	if (SEND_MESSAGE_LEN(state->sd, &net_order, sizeof(net_order), NO_FLAGS) < SUCCESS) {
 		fprintf(stderr, "Error: unable to send message len (socket error).\n");
 		return FAILURE;
 	}
@@ -170,7 +182,6 @@ int send_message(ParticipantState *state) {
 		return FAILURE;
 	}
 
-	fprintf(stdout, "Message sent! You rock!\n");
 	return SUCCESS;
 }
 

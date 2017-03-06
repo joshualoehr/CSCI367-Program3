@@ -15,6 +15,7 @@
 #define MIN_PORT 1024
 #define NO_FLAGS 0
 
+#define USERNAME_MAX_LENGTH 10
 #define MSG_MAX_LEN 1000
 
 #include <sys/socket.h>
@@ -22,13 +23,12 @@
 typedef struct ParticipantState {
 	int sd;
 	int name_len;
-	char name[10];
+	char name[USERNAME_MAX_LENGTH];
 } ParticipantState;
 
 int init_connection(char *host, int port);
 int confirm_connection_allowed(ParticipantState *state);
 int prompt_and_get_username(char *input);
-int validate_username(char *name);
 int negotiate_username(ParticipantState *state);
 int main_participant(int argc, char **argv);
 
