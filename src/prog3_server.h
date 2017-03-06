@@ -20,6 +20,8 @@
 #define MAX_PARTICIPANTS 255
 #define OBSERVER 2
 #define MAX_OBSERVERS 255
+#define PENDING 3
+#define MAX_PENDING 255
 
 #define USERNAME_MAX_LENGTH 10
 
@@ -30,7 +32,7 @@ typedef struct Connection {
 	int sd;
 
 	int name_len;
-	char *name;
+	char name[USERNAME_MAX_LENGTH+1];
 } Connection;
 
 typedef struct ServerState {
@@ -39,10 +41,11 @@ typedef struct ServerState {
 
 	int p_count;
 	int o_count;
+	int pending_count;
 
 	Connection **p_conns;
 	Connection **o_conns;
-	Connection *pending_conn;
+	Connection **pending_conns;
 
 	int fd_max;
 	fd_set master_set;
@@ -54,8 +57,9 @@ typedef struct ServerState {
 
 void init_server_state(ServerState *state);
 int init_listener(int port);
-char handle_listener(int l_sd, ServerState *state);
+int negotiate_connection(int l_sd, ServerState *state);
 int new_connection(int l_sd, ServerState *state);
+int validate_username(char *name, int name_len, ServerState *state);
 int main_server(int argc, char **argv);
 
 

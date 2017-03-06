@@ -108,15 +108,22 @@ int negotiate_username(ParticipantState *state) {
 
 	while (1) {
 		PROMPT_AND_GET_USERNAME(input);
-		uint8_t input_len = strlen(input);
-		if (SEND_USERNAME_LEN(state->sd, &input_len, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
+
+		uint16_t input_len = strlen(input);
+		uint16_t net_order = htons(input_len);
+		fprintf(stdout, "Sending username len (%d -> %d)... \n", input_len, net_order);
+		if (SEND_USERNAME_LEN(state->sd, &net_order, sizeof(net_order), NO_FLAGS) < SUCCESS) {
 			fprintf(stderr, "Error: unable to send username len to server (socket error).\n");
 			return FAILURE;
 		}
-		if (SEND_USERNAME(state->sd, input, sizeof(char)*strlen(input), NO_FLAGS) < SUCCESS) {
+
+		fprintf(stdout, "Sending username (%s)... \n", input);
+		if (SEND_USERNAME(state->sd, input, sizeof(uint8_t)*input_len, NO_FLAGS) < SUCCESS) {
 			fprintf(stderr, "Error: unable to send username to server (socket error).\n");
 			return FAILURE;
 		}
+
+		fprintf(stdout, "Recving username negotiation...\n");
 		if (RECV_NEGOTIATION(state->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
 			fprintf(stderr, "Error: unable to recv username negotiation from server (socket error).\n");
 			return FAILURE;
@@ -144,7 +151,7 @@ int prompt_and_get_message(char *input) {
 }
 
 int send_message(ParticipantState *state) {
-	char input[1000], response;
+	char input[1000];
 
 	PROMPT_AND_GET_MESSAGE(input);
 	uint16_t message_len = strlen(input);
@@ -153,6 +160,7 @@ int send_message(ParticipantState *state) {
 		return INVALID;
 	}
 
+	fprintf(stdout, "Sending message (len %d): %s\n", message_len, input);
 	if (SEND_MESSAGE_LEN(state->sd, &message_len, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
 		fprintf(stderr, "Error: unable to send message len (socket error).\n");
 		return FAILURE;

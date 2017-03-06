@@ -21,6 +21,7 @@ int (*mock_accept)(int sockfd, struct sockaddr *addr, socklen_t *addrlen) = acce
 void init_server_state(ServerState *state) {
 	state->p_count = 0;
 	state->o_count = 0;
+	state->pending_count = 0;
 
 	state->p_conns = (struct Connection**) malloc(sizeof(struct Connection*) * MAX_PARTICIPANTS);
 	for (int i = 0; i < MAX_PARTICIPANTS; i++) {
@@ -29,6 +30,10 @@ void init_server_state(ServerState *state) {
 	state->o_conns = (struct Connection**) malloc(sizeof(struct Connection*) * MAX_OBSERVERS);
 	for (int i = 0; i < MAX_OBSERVERS; i++) {
 		state->o_conns[i] = (struct Connection*) malloc(sizeof(struct Connection));
+	}
+	state->pending_conns = (struct Connection**) malloc(sizeof(struct Connection*) * MAX_OBSERVERS);
+	for (int i = 0; i < MAX_PENDING; i++) {
+		state->pending_conns[i] = (struct Connection*) malloc(sizeof(struct Connection));
 	}
 
 	FD_ZERO(&state->master_set);
@@ -94,56 +99,66 @@ int init_listener(int port) {
 }
 
 
-char handle_listener(int l_sd, ServerState *state) {
-	fprintf(stdout, "Handling listener (%d)...\n", l_sd);
+int negotiate_connection(int l_sd, ServerState *state) {
+	if (state->pending_count >= MAX_PENDING) {
+		fprintf(stdout, "Connection declined: too many pending connections already.\n");
+		return INVALID;
+	}
+
 	if (new_connection(l_sd, state) == FAILURE) {
-		return '!';
-	}
-
-	if ( (l_sd == state->p_listener && state->p_count >= MAX_PARTICIPANTS) ||
-		 (l_sd == state->o_listener && state->o_count >= MAX_OBSERVERS) ) {
-		return 'N';
-	}
-
-	return 'Y';
-}
-
-
-int new_connection(int l_sd, ServerState *state) {
-	state->pending_conn = (struct Connection*) malloc(sizeof(struct Connection));
-	state->pending_conn->type = INVALID;
-	state->pending_conn->sd = INVALID;
-	state->pending_conn->name_len = 0;
-	state->pending_conn->name = "";
-
-	struct sockaddr_in cad;
-	int alen = sizeof(cad);
-	fprintf(stdout, "Waiting to accept new connection (%d)... ", l_sd);
-	int new_sd = ACCEPT(l_sd, (struct sockaddr *)&cad, &alen);
-	if (new_sd == INVALID) {
-		fprintf(stderr, "Error: socket accept failed\n");
 		return FAILURE;
 	}
-	fprintf(stdout, "accepted (%d)!\n", new_sd);
 
-	state->pending_conn->type = (l_sd == state->p_listener) ? PARTICIPANT : OBSERVER;
-	state->pending_conn->sd = new_sd;
+	Connection *pending_conn = state->pending_conns[state->pending_count++];
+	FD_SET(pending_conn->sd, &state->master_set);
+	state->fd_max = (pending_conn->sd > state->fd_max) ? pending_conn->sd : state->fd_max;
+
+	fprintf(stdout, "Established new connection (%d)\n", pending_conn->sd);
+
+	char response = 'Y';
+	if ( (l_sd == state->p_listener && state->p_count >= MAX_PARTICIPANTS) ||
+		 (l_sd == state->o_listener && state->o_count >= MAX_OBSERVERS) ) {
+		response = 'N';
+	}
+
+	if (send(pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
+		fprintf(stderr, "Error: unable to send connection confirmation to participant (socket error).\n");
+		return FAILURE;
+	}
 
 	return SUCCESS;
 }
 
 
-int validate_username(int len, char *name, ServerState *state) {
+int new_connection(int l_sd, ServerState *state) {
+	Connection *pending_conn = state->pending_conns[state->pending_count];
+	pending_conn->type = (l_sd == state->p_listener) ? PARTICIPANT : OBSERVER;
+	pending_conn->sd = INVALID;
+	pending_conn->name_len = 0;
+	memset(pending_conn->name, '\0', USERNAME_MAX_LENGTH + 1);
+
+	struct sockaddr_in cad;
+	int alen = sizeof(cad);
+	pending_conn->sd = ACCEPT(l_sd, (struct sockaddr *)&cad, &alen);
+	if (pending_conn->sd == INVALID) {
+		fprintf(stderr, "Error: socket accept failed\n");
+		return FAILURE;
+	}
+
+	return SUCCESS;
+}
+
+
+int validate_username(char *name, int name_len, ServerState *state) {
 	/* Check username is of valid length */
-	if (0 == len || len > USERNAME_MAX_LENGTH) {
+	if (0 == name_len || name_len > USERNAME_MAX_LENGTH) {
 		return 'I';
 	}
 
 	/* Check username has only valid characters */
-	for (int i = 0; i < len; i++) {
-		char c = name[i];
-		if( (c < '0' || c > '9') && (c < 'A' || c > 'Z') &&
-			(c < 'a' || c > 'z') && (c != '_' )) {
+	for (int i = 0; i < name_len; i++) {
+		if( (name[i] < '0' || name[i] > '9') && (name[i] < 'A' || name[i] > 'Z') &&
+			(name[i] < 'a' || name[i] > 'z') && (name[i] != '_' )) {
 			  return 'I';
 		}
 	}
@@ -201,45 +216,71 @@ int main_server(int argc, char **argv) {
 		/* Check listeners */
 		if (FD_ISSET(state.p_listener, &state.read_set)) {
 			/* Send connection confirmation */
-			char response = handle_listener(state.p_listener, &state);
-			if (send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
-				fprintf(stderr, "Error: unable to send connection confirmation to participant (socket error).\n");
-			}
-
-			fprintf(stdout, "Recving username len... ");
-			/* Receive username (length, then string) */
-			uint8_t name_len;
-			if (recv(state.pending_conn->sd, &name_len, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
-				fprintf(stderr, "Error: unable to recv username len from participant (socket error).\n");
-			}
-			fprintf(stdout, "%d\n", name_len);
-			char name[name_len];
-			fprintf(stdout, "Recving username... ");
-			if (recv(state.pending_conn->sd, &name, sizeof(char) * name_len, NO_FLAGS) < SUCCESS) {
-				fprintf(stderr, "Error: unable to recv username from participant (socket error).\n");
-			}
-			fprintf(stdout, "%s\n", name);
-
-			/* Send username confirmation */
-			response = validate_username(name_len, name, &state);
-			fprintf(stdout, "Sending username confirmation (%c)...\n", response);
-			if (send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
-				fprintf(stderr, "Error: unable to send username confirmation to participant (socket error).\n");
-			} else {
-				state.pending_conn->name = name;
-				state.pending_conn->name_len = name_len;
-			}
-
-			if (response == 'Y') {
-				// broadcast to observers
-				fprintf(stdout, "Adding active participant (%s) to p_conns\n", name);
-				state.p_conns[state.p_count++] = state.pending_conn;
+			if (negotiate_connection(state.p_listener, &state) == FAILURE) {
+				fprintf(stderr, "Error: unable to negotiate connection with participant.\n");
 			}
 		}
 		if (FD_ISSET(state.o_listener, &state.read_set)) {
-			fprintf(stdout, "Handling o_listener\n");
-			char response = handle_listener(state.o_listener, &state);
-			send(state.pending_conn->sd, &response, sizeof(char), NO_FLAGS);
+			/* Send connection confirmation */
+			if (negotiate_connection(state.o_listener, &state) == FAILURE) {
+				fprintf(stderr, "Error: unable to negotiate connection with observer.\n");
+			}
+		}
+
+		/* Check pending connections */
+		for (int i = 0; i < state.pending_count; i++) {
+			Connection *pending_conn = state.pending_conns[i];
+
+			if (FD_ISSET(pending_conn->sd, &state.read_set)) {
+				char response;
+
+				/* Receive username (length, then string) */
+				fprintf(stdout, "Recving username len (%d)... ", pending_conn->sd);
+				uint16_t name_len = 0;
+				uint16_t net_order = 0;
+				if (recv(pending_conn->sd, &net_order, sizeof(net_order), NO_FLAGS) < SUCCESS) {
+					fprintf(stderr, "Error: unable to recv username len from participant (socket error).\n");
+				}
+				name_len = ntohs(net_order);
+				fprintf(stdout, "%d -> %d\n", net_order, name_len);
+
+				fprintf(stdout, "Recving username (%d)... ", pending_conn->sd);
+				char name[name_len + 1];
+				if (recv(pending_conn->sd, name, sizeof(name), NO_FLAGS) < SUCCESS) {
+					fprintf(stderr, "Error: unable to recv username from participant (socket error).\n");
+				}
+				name[name_len] = '\0';
+				fprintf(stdout, "%s\n", name);
+
+				/* Send username confirmation */
+				response = validate_username(name, name_len, &state);
+				fprintf(stdout, "Sending username confirmation (%c)\n", response);
+				if (send(pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
+					fprintf(stderr, "Error: unable to send username confirmation to participant (socket error).\n");
+				}
+
+				if (response == 'Y') {
+					pending_conn->name_len = name_len;
+					strcpy(pending_conn->name, name);
+
+					// broadcast to observers
+					fprintf(stdout, "Adding active participant (%s) to p_conns\n", pending_conn->name);
+					state.p_conns[state.p_count++] = pending_conn;
+
+					/* Remove connection from pending_conns */
+					for (int j = 0; j < state.pending_count; j++) {
+						if (state.pending_conns[j] == pending_conn) {
+							while (j < state.pending_count - 1) {
+								state.pending_conns[j] = state.pending_conns[j+1];
+								j++;
+							}
+							break;
+						}
+					}
+					state.pending_count--;
+					i--;
+				}
+			}
 		}
 
 		/* Check participant connections */
@@ -247,11 +288,11 @@ int main_server(int argc, char **argv) {
 			Connection *conn = state.p_conns[i];
 
 			if (FD_ISSET(conn->sd, &state.read_set)) {
-				fprintf(stdout, "Participant sending!");
+//				fprintf(stdout, "Participant sending!");
 				// handle participant communication
 			}
 			if (FD_ISSET(conn->sd, &state.write_set)) {
-				fprintf(stdout, "Participant recving!");
+//				fprintf(stdout, "Participant recving!");
 				// handle participant communication
 			}
 		}
@@ -278,6 +319,9 @@ int main_server(int argc, char **argv) {
 		}
 		for (int o = 0; o < state.o_count; o++) {
 			FD_SET(state.o_conns[o]->sd, &state.master_set);
+		}
+		for (int p = 0; p < state.pending_count; p++) {
+			FD_SET(state.pending_conns[p]->sd, &state.master_set);
 		}
 	}
 }
