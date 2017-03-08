@@ -66,6 +66,9 @@ void init_server_state(ServerState *state) {
 	FD_ZERO(&state->master_set);
 	FD_ZERO(&state->read_set);
 	FD_ZERO(&state->write_set);
+
+	state->timeout.tv_sec = 1;
+	state->timeout.tv_usec = 500000;
 }
 
 
@@ -343,6 +346,7 @@ int broadcast_user_msg(uint16_t msg_len, char *msg, char *src_name, ServerState 
 
 int broadcast_server_msg(char *msg, int name_len, char *name, ServerState *state) {
 	if (name_len) {
+		name[name_len] = '\0';
 		uint16_t broadcast_len = strlen(msg) - 2 + name_len;
 		char broadcast[broadcast_len];
 		sprintf(broadcast, msg, name);
@@ -386,8 +390,8 @@ int main_server(int argc, char **argv) {
 	while (1) {
 		time(&now);
 		struct timeval timeout;
-		timeout.tv_sec = 1;
-		timeout.tv_usec = 0;
+		timeout.tv_sec = state.timeout.tv_sec;
+		timeout.tv_usec = state.timeout.tv_usec;
 
 		/* Select sockets and update fd_sets */
 		state.read_set = state.master_set;
@@ -396,6 +400,12 @@ int main_server(int argc, char **argv) {
 			fprintf(stderr, "Error: unable to select.\n");
 			return EXIT_FAILURE;
 		}
+
+		struct timeval timediff;
+		timediff.tv_sec = state.timeout.tv_sec - timeout.tv_sec;
+		timediff.tv_usec = state.timeout.tv_usec - timeout.tv_usec;
+
+		//fprintf(stdout, "timediff: %ds %dus\n", timediff.tv_sec, timediff.tv_usec);
 
 		/* Check participant connections */
 		for (int i = 0; i < state.p_count; i++) {
@@ -411,13 +421,7 @@ int main_server(int argc, char **argv) {
 				fprintf(stdout, "Recv'd msg len (%d -> %d)\n", net_order, msg_len);
 
 				if (status != SUCCESS || msg_len > INC_MSG_MAX_LEN) {
-					broadcast_server_msg("User %s has left", conn->name_len, conn->name, &state);
-					if (remove_connection(conn, &state) == SUCCESS) {
-						if (conn->affiliated != NULL) {
-							conn->affiliated->deferred_disconnect = 1;
-						}
-						i--;
-					}
+					conn->disconnect = 1;
 				} else {
 					char msg[msg_len];
 					if (recv_(conn, &msg, sizeof(char) * msg_len, NO_FLAGS, &state) == SUCCESS) {
@@ -427,7 +431,13 @@ int main_server(int argc, char **argv) {
 				}
 
 				if (conn->disconnect) {
-					remove_connection(conn, &state);
+					broadcast_server_msg("User %s has left", conn->name_len, conn->name, &state);
+					if (remove_connection(conn, &state) == SUCCESS) {
+						if (conn->affiliated != NULL) {
+							conn->affiliated->deferred_disconnect = 1;
+						}
+						i--;
+					}
 				}
 			}
 		}
@@ -458,7 +468,27 @@ int main_server(int argc, char **argv) {
 		for (int i = 0; i < state.pending_count; i++) {
 			Connection *pending_conn = state.pending_conns[i];
 
-			if (FD_ISSET(pending_conn->sd, &state.read_set)) {
+			int orig_sec = pending_conn->timeout.tv_sec;
+
+			/* Update timeout values */
+			pending_conn->timeout.tv_sec -= timediff.tv_sec;
+			pending_conn->timeout.tv_usec -= timediff.tv_usec;
+			while (pending_conn->timeout.tv_usec < 0) {
+				pending_conn->timeout.tv_sec -= 1;
+				pending_conn->timeout.tv_usec += 1000000;
+			}
+
+			if (pending_conn->timeout.tv_sec != orig_sec)
+				fprintf(stdout, "(PENDING|%d|%d;%d)\n", pending_conn->sd, pending_conn->timeout.tv_sec, pending_conn->timeout.tv_usec);
+
+			/* Disconnect if timeout expires */
+			if ( pending_conn->timeout.tv_sec < 0 ||
+				(pending_conn->timeout.tv_sec == 0 && pending_conn->timeout.tv_usec == 0) ) {
+				close(pending_conn->sd);
+				remove_connection(pending_conn, &state);
+				i--;
+
+			} else if (FD_ISSET(pending_conn->sd, &state.read_set)) {
 				char response = 0;
 
 				/* Receive username (length, then string) */
@@ -471,8 +501,11 @@ int main_server(int argc, char **argv) {
 					if (recv_(pending_conn, name, sizeof(char) * name_len, NO_FLAGS, &state) == SUCCESS) {
 						fprintf(stdout, "(PENDING|%d) Recv'd username (%s)\n", pending_conn->sd, name);
 						strcpy(pending_conn->name, name);
+						for (int j = name_len; j < USERNAME_MAX_LENGTH; j++) {
+							pending_conn->name[j] = '\0';
+						}
 
-						response = validate_username(name, name_len, pending_conn->type, &state);
+						response = validate_username(pending_conn->name, name_len, pending_conn->type, &state);
 						if (send(pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
 							fprintf(stderr, "Error: unable to send username confirmation to participant (socket error).\n");
 						}
@@ -487,6 +520,7 @@ int main_server(int argc, char **argv) {
 						active_conn->sd = pending_conn->sd;
 						active_conn->type = PARTICIPANT;
 						active_conn->name_len = pending_conn->name_len;
+
 						strcpy(active_conn->name, pending_conn->name);
 						active_conn->affiliated = NULL;
 						active_conn->disconnect = 0;
@@ -528,6 +562,9 @@ int main_server(int argc, char **argv) {
 				} else if (response == 'N') {
 					pending_conn->disconnect = 1;
 					close(pending_conn->sd);
+				} else if (response == 'T') {
+					pending_conn->timeout.tv_sec = TIMEOUT;
+					pending_conn->timeout.tv_usec = 0;
 				}
 
 				if (pending_conn->disconnect) {

@@ -29,6 +29,7 @@ typedef struct ObserverState {
 int init_connection(char *host, int port);
 int confirm_connection_allowed(ObserverState *state);
 int prompt_and_get_username(char *input);
+int validate_username(char *name);
 int negotiate_username(ObserverState *state);
 int recv_message(ObserverState *state);
 int main_observer(int argc, char **argv);

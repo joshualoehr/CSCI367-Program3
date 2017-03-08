@@ -92,7 +92,32 @@ int confirm_connection_allowed(ObserverState *state) {
 int prompt_and_get_username(char *input) {
 	fprintf(stdout, "Enter username: ");
 	while (scanf("%s", input) < SUCCESS) {
-		fprintf(stderr, "Error: unable to read stdin, try again.\n");
+		fprintf(stdout, "Enter username: ");
+	}
+
+	if (validate_username(input) == INVALID) {
+		return prompt_and_get_username(input);
+	} else {
+		return SUCCESS;
+	}
+}
+
+int validate_username(char *name) {
+	int name_len = strlen(name);
+
+	/* Check username is of valid length */
+	if (0 == name_len || name_len > USERNAME_MAX_LENGTH) {
+		fprintf(stdout, "Invalid: exceeded maximum of 10 characters\n");
+		return INVALID;
+	}
+
+	/* Check username has only valid characters */
+	for (int i = 0; i < name_len; i++) {
+		if( (name[i] < '0' || name[i] > '9') && (name[i] < 'A' || name[i] > 'Z') &&
+			(name[i] < 'a' || name[i] > 'z') && (name[i] != '_' )) {
+			fprintf(stdout, "Invalid: must contain only alphanumeric characters and underscores\n");
+			return INVALID;
+		}
 	}
 
 	return SUCCESS;

@@ -29,6 +29,7 @@ typedef struct ParticipantState {
 int init_connection(char *host, int port);
 int confirm_connection_allowed(ParticipantState *state);
 int prompt_and_get_username(char *input);
+int validate_username(char *name);
 int negotiate_username(ParticipantState *state);
 int main_participant(int argc, char **argv);
 

@@ -31,7 +31,7 @@
 #define OUT_MSG_MAX_LEN 1014
 #define QUEUE_MAX 1000
 
-#define TIMEOUT 10
+#define TIMEOUT 60
 
 #include <stdint.h>
 #include <sys/socket.h>
@@ -43,7 +43,7 @@ struct Connection {
 	int sd;
 
 	int name_len;
-	char name[USERNAME_MAX_LENGTH+1];
+	char name[USERNAME_MAX_LENGTH];
 
 	Connection *affiliated;
 
@@ -72,6 +72,7 @@ typedef struct ServerState {
 	fd_set master_set;
 	fd_set read_set;
 	fd_set write_set;
+	struct timeval timeout;
 } ServerState;
 
 int recv_(Connection *conn, void *buf, size_t len, int flags, ServerState *state);

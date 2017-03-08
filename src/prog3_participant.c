@@ -98,7 +98,32 @@ int confirm_connection_allowed(ParticipantState *state) {
 int prompt_and_get_username(char *input) {
 	fprintf(stdout, "Enter username: ");
 	while (scanf("%s", input) < SUCCESS) {
-		fprintf(stderr, "Error: unable to read stdin, try again.\n");
+		fprintf(stdout, "Enter username: ");
+	}
+
+	if (validate_username(input) == INVALID) {
+		return prompt_and_get_username(input);
+	} else {
+		return SUCCESS;
+	}
+}
+
+int validate_username(char *name) {
+	int name_len = strlen(name);
+
+	/* Check username is of valid length */
+	if (0 == name_len || name_len > USERNAME_MAX_LENGTH) {
+		fprintf(stdout, "Invalid: exceeded maximum of 10 characters\n");
+		return INVALID;
+	}
+
+	/* Check username has only valid characters */
+	for (int i = 0; i < name_len; i++) {
+		if( (name[i] < '0' || name[i] > '9') && (name[i] < 'A' || name[i] > 'Z') &&
+			(name[i] < 'a' || name[i] > 'z') && (name[i] != '_' )) {
+			fprintf(stdout, "Invalid: must contain only alphanumeric characters and underscores\n");
+			return INVALID;
+		}
 	}
 
 	return SUCCESS;
@@ -123,9 +148,13 @@ int negotiate_username(ParticipantState *state) {
 			return FAILURE;
 		}
 
+		int status;
 		if (DEBUG) fprintf(stdout, "Recving username negotiation...\n");
-		if (RECV_NEGOTIATION(state->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
+		if ((status = RECV_NEGOTIATION(state->sd, &response, sizeof(char), NO_FLAGS)) < 0) {
 			fprintf(stderr, "Error: unable to recv username negotiation from server (socket error).\n");
+			return FAILURE;
+		} else if (status == 0) {
+			fprintf(stdout, "Time expired, connection closed\n");
 			return FAILURE;
 		}
 		switch (response) {
@@ -149,7 +178,7 @@ int prompt_and_get_message(char *input) {
 
 	/* Get input */
 	while (scanf("%1000[^\n]", input) < SUCCESS) {
-		fprintf(stderr, "Error: unable to read stdin, try again.\n");
+		fprintf(stdout, "Enter message: ");
 		while ((c = getchar()) != EOF && c != '\n');
 	}
 
@@ -208,7 +237,6 @@ int main_participant(int argc, char **argv) {
 	}
 
 	if (negotiate_username(&state) == FAILURE) {
-		fprintf(stderr, "Error: unable to negotiate username.\n");
 		return EXIT_FAILURE;
 	}
 
