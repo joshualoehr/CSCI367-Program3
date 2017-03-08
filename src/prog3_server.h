@@ -16,6 +16,8 @@
 #define FAILURE 0
 #define INVALID -1
 
+#define MULTICAST "$MULTICAST"
+
 #define PARTICIPANT 1
 #define MAX_PARTICIPANTS 255
 #define OBSERVER 2
@@ -25,10 +27,15 @@
 #define MAX_PENDING 255
 
 #define USERNAME_MAX_LENGTH 10
-#define MSG_MAX_LEN 1000
-#define QUEUE_MAX 255
+#define INC_MSG_MAX_LEN 1000
+#define OUT_MSG_MAX_LEN 1014
+#define QUEUE_MAX 1000
 
+#define TIMEOUT 10
+
+#include <stdint.h>
 #include <sys/socket.h>
+
 
 typedef struct Connection Connection;
 struct Connection {
@@ -42,8 +49,10 @@ struct Connection {
 
 	int queue_len;
 	char **msg_queue;
+	uint16_t *msg_queue_lens;
 
 	int deferred_disconnect;
+	struct timeval timeout;
 };
 
 typedef struct ServerState {
@@ -67,14 +76,18 @@ typedef struct ServerState {
 } ServerState;
 
 int recv_(Connection *conn, void *buf, size_t len, int flags, ServerState *state);
-int remove_connection(Connection *conn, ServerState *state);
+//time_t find_smallest_timeout(time_t now, ServerState *state);
 
 void init_server_state(ServerState *state);
 int init_listener(int port);
 int negotiate_connection(int l_sd, ServerState *state);
 int new_connection(int l_sd, ServerState *state);
+int remove_connection(Connection *conn, ServerState *state);
 int validate_username(char *name, int name_len, int type, ServerState *state);
-int enqueue_message(char *msg, ServerState *state);
+int dequeue_and_send_msg(Connection *conn);
+int enqueue_msg(uint16_t msg_len, char *msg, char *recipient, ServerState *state);
+int broadcast_user_msg(uint16_t msg_len, char *msg, char *src_name, ServerState *state);
+int broadcast_server_msg(char *msg, int name_len, char *name, ServerState *state);
 int main_server(int argc, char **argv);
 
 
