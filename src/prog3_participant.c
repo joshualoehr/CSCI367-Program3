@@ -1,4 +1,4 @@
-#define DEBUG 0
+#define DEBUG 1
 
 #ifdef TEST
 #define CONNECT mock_connect
@@ -84,12 +84,11 @@ int init_connection(char *host, int port) {
 // Untested
 int confirm_connection_allowed(ParticipantState *state) {
 	uint8_t response;
-	if (DEBUG) fprintf(stdout, "Waiting for server confirmation... ");
 	if (recv(state->sd, &response, sizeof(uint8_t), NO_FLAGS) < SUCCESS) {
 		fprintf(stderr, "Error: unable to recv connection confirmation from server.\n");
 		return FAILURE;
 	}
-	if (DEBUG) fprintf(stdout, "%c\n", response);
+	if (DEBUG) fprintf(stdout, "Server replied %c\n", response);
 
 	return response == 'Y' ? SUCCESS : FAILURE;
 }
@@ -98,7 +97,7 @@ int confirm_connection_allowed(ParticipantState *state) {
 int prompt_and_get_username(char *input) {
 	fprintf(stdout, "Enter username: ");
 	while (scanf("%s", input) < SUCCESS) {
-		fprintf(stdout, "Enter username: ");
+		//fprintf(stdout, "Enter username: ");
 	}
 
 	if (validate_username(input) == INVALID) {

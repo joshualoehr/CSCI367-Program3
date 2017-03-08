@@ -24,7 +24,7 @@
 #define MAX_OBSERVERS 255
 #define PENDING_PARTICIPANT 3
 #define PENDING_OBSERVER 4
-#define MAX_PENDING 255
+#define MAX_PENDING 510
 
 #define USERNAME_MAX_LENGTH 10
 #define INC_MSG_MAX_LEN 1000
@@ -63,6 +63,8 @@ typedef struct ServerState {
 	int p_count;
 	int o_count;
 	int pending_count;
+	int pending_p_count;
+	int pending_o_count;
 
 	Connection **p_conns;
 	Connection **o_conns;

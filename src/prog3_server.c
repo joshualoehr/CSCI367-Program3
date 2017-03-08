@@ -34,14 +34,19 @@ int recv_(Connection *conn, void *buf, size_t len, int flags, ServerState *state
 	return SUCCESS;
 }
 
-//time_t find_smallest_timeout(time_t now, ServerState *state) {
-//	time_t min = TIMEOUT;
-//	for (int i = 0; i < state->pending_count; i++) {
-//		time_t diff = state->pending_conns[i]->timeout - now;
-//		min = (diff < min) ? diff : min;
-//	}
-//	return min;
-//}
+struct timeval find_smallest_timeout(ServerState *state) {
+	struct timeval smallest = state->timeout;
+	long min_total = (1000000 * smallest.tv_sec) + smallest.tv_usec;
+	for (int i = 0; i < state->pending_count; i++) {
+		struct timeval t = state->pending_conns[i]->timeout;
+		long total = (1000000 * t.tv_sec) + t.tv_usec;
+		if (total < min_total) {
+			min_total = total;
+			smallest = t;
+		}
+	}
+	return smallest;
+}
 
 /* MAIN FUNCTIONS */
 
@@ -49,6 +54,8 @@ void init_server_state(ServerState *state) {
 	state->p_count = 0;
 	state->o_count = 0;
 	state->pending_count = 0;
+	state->pending_p_count = 0;
+	state->pending_o_count = 0;
 
 	state->p_conns = (struct Connection**) malloc(sizeof(struct Connection*) * MAX_PARTICIPANTS);
 	for (int i = 0; i < MAX_PARTICIPANTS; i++) {
@@ -58,7 +65,7 @@ void init_server_state(ServerState *state) {
 	for (int i = 0; i < MAX_OBSERVERS; i++) {
 		state->o_conns[i] = (struct Connection*) malloc(sizeof(struct Connection));
 	}
-	state->pending_conns = (struct Connection**) malloc(sizeof(struct Connection*) * MAX_OBSERVERS);
+	state->pending_conns = (struct Connection**) malloc(sizeof(struct Connection*) * MAX_PENDING);
 	for (int i = 0; i < MAX_PENDING; i++) {
 		state->pending_conns[i] = (struct Connection*) malloc(sizeof(struct Connection));
 	}
@@ -141,15 +148,30 @@ int negotiate_connection(int l_sd, ServerState *state) {
 
 	fprintf(stdout, "Established new connection (%d)\n", pending_conn->sd);
 
+
 	char response = 'Y';
-	if ( (l_sd == state->p_listener && state->p_count >= MAX_PARTICIPANTS) ||
-		 (l_sd == state->o_listener && state->o_count >= MAX_OBSERVERS) ) {
-		response = 'N';
+	if (l_sd == state->p_listener) {
+		state->pending_p_count++;
+		if (state->p_count + state->pending_p_count >= MAX_PARTICIPANTS) {
+			fprintf(stdout, "Refusing connection (%d)\n", pending_conn->sd);
+			response = 'N';
+		}
+	} else if (l_sd == state->o_listener) {
+		state->pending_o_count++;
+		if (state->o_count + state->pending_o_count >= MAX_OBSERVERS) {
+			fprintf(stdout, "Refusing connection (%d)\n", pending_conn->sd);
+			response = 'N';
+		}
 	}
 
 	if (send(pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
 		fprintf(stderr, "Error: unable to send connection confirmation to participant (socket error).\n");
 		return FAILURE;
+	}
+
+	if (response == 'N') {
+		close(pending_conn->sd);
+		remove_connection(pending_conn, state);
 	}
 
 	return SUCCESS;
@@ -214,7 +236,11 @@ int remove_connection(Connection *conn, ServerState *state) {
 		conn->affiliated->affiliated = NULL;
 	}
 
-	if (conn->type != PENDING_PARTICIPANT && conn->type != PENDING_OBSERVER) {
+	if (conn->type == PENDING_PARTICIPANT) {
+		state->pending_p_count--;
+	} else if (conn->type == PENDING_OBSERVER) {
+		state->pending_o_count--;
+	} else {
 		close(conn->sd);
 	}
 
@@ -312,8 +338,9 @@ int enqueue_msg(uint16_t msg_len, char *msg, char *recipient, ServerState *state
 
 int broadcast_user_msg(uint16_t msg_len, char *msg, char *src_name, ServerState *state) {
 	uint16_t broadcast_len = msg_len + 14;
-	char broadcast[broadcast_len];
+	char broadcast[broadcast_len+1];
 	char dst_name[INC_MSG_MAX_LEN];
+	memset(dst_name, '\0', INC_MSG_MAX_LEN);
 
 	int private = sscanf(msg, "@%s", dst_name);
 	if (private && msg[1] == ' ') private = 0; // deal with strange edge case
@@ -386,12 +413,8 @@ int main_server(int argc, char **argv) {
 	FD_SET(state.o_listener, &state.master_set);
 	state.fd_max = (state.p_listener > state.o_listener) ? state.p_listener : state.o_listener;
 
-	time_t now;
 	while (1) {
-		time(&now);
-		struct timeval timeout;
-		timeout.tv_sec = state.timeout.tv_sec;
-		timeout.tv_usec = state.timeout.tv_usec;
+		struct timeval timeout = find_smallest_timeout(&state);
 
 		/* Select sockets and update fd_sets */
 		state.read_set = state.master_set;
@@ -422,9 +445,10 @@ int main_server(int argc, char **argv) {
 
 				if (status != SUCCESS || msg_len > INC_MSG_MAX_LEN) {
 					conn->disconnect = 1;
-				} else {
-					char msg[msg_len];
-					if (recv_(conn, &msg, sizeof(char) * msg_len, NO_FLAGS, &state) == SUCCESS) {
+				} else if (msg_len > 0) {
+					char msg[msg_len+1];
+					if (recv_(conn, &msg, sizeof(char) * msg_len, MSG_WAITALL, &state) == SUCCESS) {
+						msg[msg_len] = '\0';
 						broadcast_user_msg(msg_len, msg, conn->name, &state);
 						fprintf(stdout, "Recv'd msg %s\n", msg);
 					}
@@ -477,9 +501,6 @@ int main_server(int argc, char **argv) {
 				pending_conn->timeout.tv_sec -= 1;
 				pending_conn->timeout.tv_usec += 1000000;
 			}
-
-			if (pending_conn->timeout.tv_sec != orig_sec)
-				fprintf(stdout, "(PENDING|%d|%d;%d)\n", pending_conn->sd, pending_conn->timeout.tv_sec, pending_conn->timeout.tv_usec);
 
 			/* Disconnect if timeout expires */
 			if ( pending_conn->timeout.tv_sec < 0 ||

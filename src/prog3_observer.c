@@ -92,7 +92,7 @@ int confirm_connection_allowed(ObserverState *state) {
 int prompt_and_get_username(char *input) {
 	fprintf(stdout, "Enter username: ");
 	while (scanf("%s", input) < SUCCESS) {
-		fprintf(stdout, "Enter username: ");
+		//fprintf(stdout, "Enter username: ");
 	}
 
 	if (validate_username(input) == INVALID) {
