@@ -24,6 +24,7 @@ int (*mock_accept)(int sockfd, struct sockaddr *addr, socklen_t *addrlen) = acce
 int recv_(Connection *conn, void *buf, size_t len, int flags, ServerState *state) {
 	int status = recv(conn->sd, buf, len, flags);
 	if (status == 0) {
+		conn->disconnect = 1;
 		return INVALID;
 	} else if (status < 0) {
 		fprintf(stderr, "Error: unable to recv message (socket error)\n");
@@ -65,10 +66,6 @@ void init_server_state(ServerState *state) {
 	FD_ZERO(&state->master_set);
 	FD_ZERO(&state->read_set);
 	FD_ZERO(&state->write_set);
-
-	// TODO: This will change
-	state->timeout.tv_sec = 0;
-	state->timeout.tv_usec = 50000;
 }
 
 
@@ -163,6 +160,7 @@ int new_connection(int l_sd, ServerState *state) {
 	pending_conn->name_len = 0;
 	memset(pending_conn->name, '\0', USERNAME_MAX_LENGTH + 1);
 	pending_conn->affiliated = NULL;
+	pending_conn->disconnect = 0;
 	pending_conn->deferred_disconnect = 0;
 	pending_conn->timeout.tv_sec = TIMEOUT;
 	pending_conn->timeout.tv_usec = 0;
@@ -178,9 +176,11 @@ int new_connection(int l_sd, ServerState *state) {
 	return SUCCESS;
 }
 
+
 int remove_connection(Connection *conn, ServerState *state) {
 	/* Remove connection from pending_conns */
-	fprintf(stdout, "Removing connection (%s|%d)\n", conn->name, conn->sd);
+	fprintf(stdout, "Removing connection (%s|%d)\n",
+			conn->type == PENDING_PARTICIPANT || conn->type == PENDING_OBSERVER ? "PENDING" : conn->name, conn->sd);
 
 	Connection **conns;
 	int *conn_count;
@@ -191,6 +191,7 @@ int remove_connection(Connection *conn, ServerState *state) {
 	case PENDING_PARTICIPANT:
 	case PENDING_OBSERVER: conns = state->pending_conns; conn_count = &state->pending_count; break;
 	}
+
 	for (int j = 0; j < *conn_count; j++) {
 		if (conns[j] == conn) {
 			while (j < *conn_count - 1) {
@@ -204,13 +205,16 @@ int remove_connection(Connection *conn, ServerState *state) {
 			return FAILURE;
 		}
 	}
+	*conn_count = *conn_count - 1;
 
 	if (conn->type == OBSERVER) {
 		conn->affiliated->affiliated = NULL;
 	}
 
-	close(conn->sd);
-	*conn_count = *conn_count - 1;
+	if (conn->type != PENDING_PARTICIPANT && conn->type != PENDING_OBSERVER) {
+		close(conn->sd);
+	}
+
 	return SUCCESS;
 }
 
@@ -346,7 +350,6 @@ int broadcast_server_msg(char *msg, int name_len, char *name, ServerState *state
 	} else {
 		return enqueue_msg(strlen(msg), msg, MULTICAST, state);
 	}
-
 }
 
 int main_server(int argc, char **argv) {
@@ -383,12 +386,8 @@ int main_server(int argc, char **argv) {
 	while (1) {
 		time(&now);
 		struct timeval timeout;
-		//timeout.tv_sec = find_smallest_timeout(now, &state);
 		timeout.tv_sec = 1;
 		timeout.tv_usec = 0;
-//		fprintf(stdout, "Timeout calculated as %d.%d\n", timeout.tv_sec, timeout.tv_usec);
-
-		//fprintf(stdout, "timeout: %d.%d\n", timeout.tv_sec, timeout.tv_usec);
 
 		/* Select sockets and update fd_sets */
 		state.read_set = state.master_set;
@@ -397,8 +396,6 @@ int main_server(int argc, char **argv) {
 			fprintf(stderr, "Error: unable to select.\n");
 			return EXIT_FAILURE;
 		}
-
-		//fprintf(stdout, "timeout: %d.%d\n", timeout.tv_sec, timeout.tv_usec);
 
 		/* Check participant connections */
 		for (int i = 0; i < state.p_count; i++) {
@@ -427,6 +424,10 @@ int main_server(int argc, char **argv) {
 						broadcast_user_msg(msg_len, msg, conn->name, &state);
 						fprintf(stdout, "Recv'd msg %s\n", msg);
 					}
+				}
+
+				if (conn->disconnect) {
+					remove_connection(conn, &state);
 				}
 			}
 		}
@@ -458,101 +459,79 @@ int main_server(int argc, char **argv) {
 			Connection *pending_conn = state.pending_conns[i];
 
 			if (FD_ISSET(pending_conn->sd, &state.read_set)) {
-				int status;
-				char response;
+				char response = 0;
 
 				/* Receive username (length, then string) */
-				fprintf(stdout, "Recving username len (%d)... ", pending_conn->sd);
 				uint8_t name_len = 0;
-				status = recv_(pending_conn, &name_len, sizeof(name_len), NO_FLAGS, &state);
-				if (status == FAILURE) {
-					fprintf(stderr, "Error: unable to recv username len from participant (socket error).\n");
-				}
-				fprintf(stdout, "%d\n", name_len);
-				pending_conn->name_len = name_len;
+				if (recv_(pending_conn, &name_len, sizeof(name_len), NO_FLAGS, &state) == SUCCESS) {
+					fprintf(stdout, "(PENDING|%d) Recv'd username len (%d)\n", pending_conn->sd, name_len);
+					pending_conn->name_len = name_len;
 
-				char name[name_len + 1];
-				if (status == SUCCESS) {
-					fprintf(stdout, "Recving username (%d)... ", pending_conn->sd);
+					char name[name_len];
+					if (recv_(pending_conn, name, sizeof(char) * name_len, NO_FLAGS, &state) == SUCCESS) {
+						fprintf(stdout, "(PENDING|%d) Recv'd username (%s)\n", pending_conn->sd, name);
+						strcpy(pending_conn->name, name);
 
-					status = recv_(pending_conn, name, sizeof(name), NO_FLAGS, &state);
-					if (status == FAILURE) {
-						fprintf(stderr, "Error: unable to recv username from participant (socket error).\n");
-					}
-					name[name_len] = '\0';
-					fprintf(stdout, "%s\n", name);
-					strcpy(pending_conn->name, name);
-
-					if (status == SUCCESS) {
-						/* Send username confirmation */
 						response = validate_username(name, name_len, pending_conn->type, &state);
-						fprintf(stdout, "Sending username confirmation (%c)\n", response);
 						if (send(pending_conn->sd, &response, sizeof(char), NO_FLAGS) < SUCCESS) {
 							fprintf(stderr, "Error: unable to send username confirmation to participant (socket error).\n");
 						}
 					}
 				}
 
-				if (pending_conn->type == PENDING_PARTICIPANT && response == 'Y') {
-					/* Add pending_conn to active participants */
-					fprintf(stdout, "Adding active participant (%s|%d) to p_conns\n", pending_conn->name, pending_conn->sd);
-					Connection *active_conn = state.p_conns[state.p_count++];
-					active_conn->sd = pending_conn->sd;
-					active_conn->type = PARTICIPANT;
-					active_conn->name_len = pending_conn->name_len;
-					strcpy(active_conn->name, pending_conn->name);
-					active_conn->affiliated = NULL;
-					active_conn->deferred_disconnect = 0;
+				if (response == 'Y') {
 
-					broadcast_server_msg("User %s has joined", active_conn->name_len, active_conn->name, &state);
-					//broadcast_server_msg("A new participant has joined", 0, NULL, &state);
+					if (pending_conn->type == PENDING_PARTICIPANT) {
+						/* Add pending_conn to active participants */
+						Connection *active_conn = state.p_conns[state.p_count++];
+						active_conn->sd = pending_conn->sd;
+						active_conn->type = PARTICIPANT;
+						active_conn->name_len = pending_conn->name_len;
+						strcpy(active_conn->name, pending_conn->name);
+						active_conn->affiliated = NULL;
+						active_conn->disconnect = 0;
+						active_conn->deferred_disconnect = 0;
 
-				} else if (pending_conn->type == PENDING_OBSERVER && response == 'Y') {
-					fprintf(stdout, "Affiliating observer (%s|%d) to active participant\n", pending_conn->name, pending_conn->sd);
-					broadcast_server_msg("A new observer has joined", 0, NULL, &state);
+						broadcast_server_msg("User %s has joined", active_conn->name_len, active_conn->name, &state);
+						pending_conn->disconnect = 1;
 
-					/* Affiliate pending_conn with corresponding active participant */
-					Connection *active_conn = state.o_conns[state.o_count++];
-					active_conn->sd = pending_conn->sd;
-					active_conn->type = OBSERVER;
-					active_conn->name_len = pending_conn->name_len;
-					strcpy(active_conn->name, pending_conn->name);
-					active_conn->deferred_disconnect = 0;
+					} else if (pending_conn->type == PENDING_OBSERVER) {
 
-					active_conn->queue_len = 0;
-					active_conn->msg_queue_lens = (uint16_t *) malloc(sizeof(uint16_t) * QUEUE_MAX);
-					active_conn->msg_queue = (char **) malloc(sizeof(char) * OUT_MSG_MAX_LEN * QUEUE_MAX);
-					for (int j = 0; j < QUEUE_MAX; j++) {
-						active_conn->msg_queue[j] = malloc(sizeof(char) * OUT_MSG_MAX_LEN);
-					}
+						broadcast_server_msg("A new observer has joined", 0, NULL, &state);
 
-					for (int k = 0; k < state.p_count; k++) {
-						if (strcmp(state.p_conns[k]->name, name) == 0) {
-							state.p_conns[k]->affiliated = active_conn;
-							active_conn->affiliated = state.p_conns[k];
-							break;
+						/* Affiliate pending_conn with corresponding active participant */
+						Connection *active_conn = state.o_conns[state.o_count++];
+						active_conn->sd = pending_conn->sd;
+						active_conn->type = OBSERVER;
+						active_conn->name_len = pending_conn->name_len;
+						strcpy(active_conn->name, pending_conn->name);
+						active_conn->disconnect = 0;
+						active_conn->deferred_disconnect = 0;
+
+						active_conn->queue_len = 0;
+						active_conn->msg_queue_lens = (uint16_t *) malloc(sizeof(uint16_t) * QUEUE_MAX);
+						active_conn->msg_queue = (char **) malloc(sizeof(char) * OUT_MSG_MAX_LEN * QUEUE_MAX);
+						for (int j = 0; j < QUEUE_MAX; j++) {
+							active_conn->msg_queue[j] = malloc(sizeof(char) * OUT_MSG_MAX_LEN);
 						}
-					}
 
+						for (int k = 0; k < state.p_count; k++) {
+							if (strcmp(state.p_conns[k]->name, active_conn->name) == 0) {
+								state.p_conns[k]->affiliated = active_conn;
+								active_conn->affiliated = state.p_conns[k];
+								break;
+							}
+						}
+
+						pending_conn->disconnect = 1;
+					}
 				} else if (response == 'N') {
-					pending_conn->name_len = name_len;
-					strcpy(pending_conn->name, name);
+					pending_conn->disconnect = 1;
 					close(pending_conn->sd);
 				}
 
-				if (status == INVALID || response == 'Y' || response == 'N') {
-					/* Remove connection from pending_conns */
-					fprintf(stdout, "Removing pending connection (%s|%d)\n", pending_conn->name, pending_conn->sd);
-					for (int j = 0; j < state.pending_count; j++) {
-						if (state.pending_conns[j] == pending_conn) {
-							while (j < state.pending_count - 1) {
-								state.pending_conns[j] = state.pending_conns[j+1];
-								j++;
-							}
-							break;
-						}
-					}
-					state.pending_count--;
+				if (pending_conn->disconnect) {
+					remove_connection(pending_conn, &state);
 					i--;
 				}
 			}

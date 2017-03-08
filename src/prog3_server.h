@@ -51,6 +51,7 @@ struct Connection {
 	char **msg_queue;
 	uint16_t *msg_queue_lens;
 
+	int disconnect;
 	int deferred_disconnect;
 	struct timeval timeout;
 };
@@ -71,8 +72,6 @@ typedef struct ServerState {
 	fd_set master_set;
 	fd_set read_set;
 	fd_set write_set;
-	struct timeval timeout;
-
 } ServerState;
 
 int recv_(Connection *conn, void *buf, size_t len, int flags, ServerState *state);
